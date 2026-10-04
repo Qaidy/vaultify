@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Background Rounded Square -->
+  <rect width="64" height="64" rx="14" fill="#0A3A2F" />
+  <!-- Huruf V Kustom yang Modern & Bold -->
+  <path d="M18 18H25L32 38L39 18H46L35.5 48H28.5L18 18Z" fill="#FFFFFF" />
+</svg>
