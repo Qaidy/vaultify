@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vaultify — Financial Insights & Tracker</title>
+    <!-- Tailwind CSS v3 Stable CDN with Design.md token mapping -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        vaultify: {
+                            primary: '#0A3A2F',
+                            primaryHover: '#062B22',
+                            bg: '#F4F5F6',
+                            surface: '#FFFFFF',
+                            textPrimary: '#111827',
+                            textSecondary: '#6B7280',
+                            border: '#E5E7EB',
+                            success: '#10B981',
+                            error: '#EF4444'
+                        },
+                        dark: {
+                            bg: '#0B1311',
+                            surface: '#111F1C',
+                            textPrimary: '#F4F5F6',
+                            textSecondary: '#9CA3AF',
+                            border: '#1F332E'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    borderRadius: {
+                        sm: '6px',
+                        md: '8px',
+                        lg: '12px',
+                        full: '9999px'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Supabase JS v2 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 9999px; }
+    </style>
+</head>
+<body class="h-full bg-vaultify-bg dark:bg-dark-bg text-vaultify-textPrimary dark:text-dark-textPrimary antialiased transition-colors duration-200">
+
+    <div id="app" class="h-full flex flex-col">
+        <!-- Rendered dynamically by Router -->
+        <div class="flex items-center justify-center h-full">
+            <div class="text-center space-y-3">
+                <i class="fa-solid fa-vault text-4xl text-vaultify-primary dark:text-emerald-400 animate-bounce"></i>
+                <p class="text-sm font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">Loading Vaultify Secure Workspace...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <script>
+        const SUPABASE_URL = "https://adqghzkkfshogssnsjke.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFkcWdoemtrZnNob2dzc25zamtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTExMDMwMDcsImV4cCI6MjEwNjY3OTAwN30.LTFJDCS8oemiMPZjOdxkK8HAK4kp2T94UrXpmzCpmSs";
+        
+        const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let currentUser = null;
+        let currentProfile = null;
+        let currentCurrency = 'USD';
+        let exchangeRates = { USD: 1, EUR: 0.92, GBP: 0.79, IDR: 15600 };
+        let currencySymbols = { USD: '$', EUR: '€', GBP: '£', IDR: 'Rp ' };
+        let mobileMenuOpen = false;
+
+        function formatMoney(amountInUSD) {
+            const rate = exchangeRates[currentCurrency] || 1;
+            const converted = amountInUSD * rate;
+            const symbol = currencySymbols[currentCurrency] || '$';
+            if (currentCurrency === 'IDR') {
+                return symbol + Math.round(converted).toLocaleString('id-ID');
+            }
+            return symbol + converted.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `pointer-events-auto px-4 py-3 rounded-lg text-sm font-medium shadow-lg flex items-center gap-3 transition-all transform translate-y-2 opacity-0 ${
+                type === 'success' ? 'bg-vaultify-primary text-white' : 'bg-rose-600 text-white'
+            }`;
+            toast.innerHTML = `<i class="fa-solid ${type === 'success' ? 'fa-circle-check' : 'fa-triangle-exclamation'}"></i> <span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => { toast.classList.remove('translate-y-2', 'opacity-0'); }, 50);
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        function toggleDarkMode() {
+            const isDark = document.documentElement.classList.toggle('dark');
+            localStorage.setItem('vaultify_theme', isDark ? 'dark' : 'light');
+        }
+
+        if (localStorage.getItem('vaultify_theme') === 'dark' || (!localStorage.getItem('vaultify_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        }
+
+        async function getAuthUser() {
+            const { data: { session } } = await db.auth.getSession();
+            if (session) {
+                currentUser = session.user;
+                const { data: profile } = await db.from('profiles').select('*').eq('id', currentUser.id).single();
+                if (profile) {
+                    currentProfile = profile;
+                    currentCurrency = profile.currency || 'USD';
+                }
+                return currentUser;
+            }
+            return null;
+        }
+
+        const routes = {
+            '/': renderDashboard,
+            '/login': renderLogin,
+            '/dashboard': renderDashboard,
+            '/analytics': renderAnalytics,
+            '/transactions': renderTransactions,
+            '/transfers': renderTransfers,
+            '/settings': renderSettings
+        };
+
+        async function router() {
+            const hash = location.hash.slice(1) || '/dashboard';
+            const baseRoute = '/' + hash.split('/')[1];
+            const appEl = document.getElementById('app');
+
+            if (baseRoute === '/login') {
+                const user = await getAuthUser();
+                if (user) {
+                    location.hash = '#/dashboard';
+                    return;
+                }
+                renderLogin(appEl);
+                return;
+            }
+
+            const user = await getAuthUser();
+            if (!user) {
+                location.hash = '#/login';
+                return;
+            }
+
+            const viewFunction = routes[baseRoute] || renderDashboard;
+            await viewFunction(appEl);
+        }
+
+        window.addEventListener('hashchange', router);
+        window.addEventListener('DOMContentLoaded', router);
+
+        function renderLogin(container) {
+            container.innerHTML = `
+                <div class="flex-1 flex flex-col lg:flex-row items-center justify-center p-6 bg-vaultify-bg dark:bg-dark-bg">
+                    <div class="w-full max-w-md bg-white dark:bg-dark-surface p-8 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm space-y-6">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-lg bg-vaultify-primary flex items-center justify-center text-white font-bold text-lg shadow-sm">
+                                <i class="fa-solid fa-vault"></i>
+                            </div>
+                            <div>
+                                <h1 class="text-xl font-bold tracking-tight text-vaultify-textPrimary dark:text-dark-textPrimary">Vaultify</h1>
+                                <p class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary">Secure Personal Financial Tracker</p>
+                            </div>
+                        </div>
+
+                        <div class="flex rounded-lg bg-vaultify-bg dark:bg-dark-bg p-1 border border-vaultify-border dark:border-dark-border">
+                            <button id="tab-signin" onclick="switchAuthMode('signin')" class="flex-1 py-2 text-xs font-semibold rounded-md bg-white dark:bg-dark-surface shadow-sm transition-all text-vaultify-textPrimary dark:text-dark-textPrimary">Sign In</button>
+                            <button id="tab-signup" onclick="switchAuthMode('signup')" class="flex-1 py-2 text-xs font-semibold rounded-md text-vaultify-textSecondary dark:text-dark-textSecondary transition-all">Create Account</button>
+                        </div>
+
+                        <form id="auth-form" onsubmit="handleAuthSubmit(event)" class="space-y-4">
+                            <div id="name-field-container" class="hidden space-y-1">
+                                <label class="text-xs font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">Full Name</label>
+                                <input type="text" id="auth-name" placeholder="Aubrey Sabina" class="w-full px-4 py-2.5 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm text-vaultify-textPrimary dark:text-dark-textPrimary focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-xs font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">Email Address</label>
+                                <input type="email" id="auth-email" required placeholder="name@vaultify.io" class="w-full px-4 py-2.5 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm text-vaultify-textPrimary dark:text-dark-textPrimary focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-xs font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">Password</label>
+                                <input type="password" id="auth-password" required placeholder="••••••••" class="w-full px-4 py-2.5 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm text-vaultify-textPrimary dark:text-dark-textPrimary focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                            </div>
+                            <button type="submit" id="auth-submit-btn" class="w-full py-3 bg-vaultify-primary text-white rounded-lg font-semibold text-sm hover:bg-vaultify-primaryHover transition-colors shadow-sm">Sign In to Vaultify</button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        let isSignUpMode = false;
+        function switchAuthMode(mode) {
+            isSignUpMode = mode === 'signup';
+            const tabIn = document.getElementById('tab-signin');
+            const tabUp = document.getElementById('tab-signup');
+            const nameField = document.getElementById('name-field-container');
+            const btn = document.getElementById('auth-submit-btn');
+
+            if (isSignUpMode) {
+                tabUp.className = "flex-1 py-2 text-xs font-semibold rounded-md bg-white dark:bg-dark-surface shadow-sm transition-all text-vaultify-textPrimary dark:text-dark-textPrimary";
+                tabIn.className = "flex-1 py-2 text-xs font-semibold rounded-md text-vaultify-textSecondary dark:text-dark-textSecondary transition-all";
+                nameField.classList.remove('hidden');
+                btn.textContent = "Create Account";
+            } else {
+                tabIn.className = "flex-1 py-2 text-xs font-semibold rounded-md bg-white dark:bg-dark-surface shadow-sm transition-all text-vaultify-textPrimary dark:text-dark-textPrimary";
+                tabUp.className = "flex-1 py-2 text-xs font-semibold rounded-md text-vaultify-textSecondary dark:text-dark-textSecondary transition-all";
+                nameField.classList.add('hidden');
+                btn.textContent = "Sign In to Vaultify";
+            }
+        }
+
+        async function handleAuthSubmit(e) {
+            e.preventDefault();
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            const fullName = document.getElementById('auth-name').value;
+            const btn = document.getElementById('auth-submit-btn');
+
+            btn.disabled = true;
+            btn.textContent = "Processing...";
+
+            try {
+                if (isSignUpMode) {
+                    const { data, error } = await db.auth.signUp({
+                        email,
+                        password,
+                        options: { data: { full_name: fullName || 'Vaultify User' } }
+                    });
+                    if (error) throw error;
+                    showToast("Account created successfully! Welcome.");
+                } else {
+                    const { data, error } = await db.auth.signInWithPassword({ email, password });
+                    if (error) throw error;
+                    showToast("Signed in successfully!");
+                }
+                location.hash = '#/dashboard';
+            } catch (err) {
+                showToast(err.message, 'error');
+                btn.disabled = false;
+                btn.textContent = isSignUpMode ? "Create Account" : "Sign In to Vaultify";
+            }
+        }
+
+        function toggleMobileMenu() {
+            mobileMenuOpen = !mobileMenuOpen;
+            const drawer = document.getElementById('mobile-drawer');
+            const backdrop = document.getElementById('mobile-backdrop');
+            if (mobileMenuOpen) {
+                drawer.classList.remove('-translate-x-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                drawer.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+        }
+
+        function renderShell(activeTab, contentHTML) {
+            const userName = currentProfile?.full_name || currentUser?.email?.split('@')[0] || 'User';
+            const userInitials = userName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+
+            const sidebarContent = `
+                <div class="p-6 flex items-center justify-between border-b border-vaultify-border dark:border-dark-border">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-lg bg-vaultify-primary flex items-center justify-center text-white font-bold text-lg shadow-sm">
+                            <i class="fa-solid fa-vault"></i>
+                        </div>
+                        <span class="text-xl font-bold tracking-tight text-vaultify-textPrimary dark:text-dark-textPrimary">Vaultify</span>
+                    </div>
+                    <!-- Close button for mobile drawer -->
+                    <button onclick="toggleMobileMenu()" class="md:hidden text-vaultify-textSecondary hover:text-vaultify-textPrimary p-2">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+
+                <div class="p-4 space-y-6 flex-1 overflow-y-auto">
+                    <div>
+                        <p class="px-3 text-xs font-semibold uppercase tracking-wider text-vaultify-textSecondary dark:text-dark-textSecondary mb-2">Main Menu</p>
+                        <nav class="space-y-1">
+                            <a href="#/dashboard" onclick="if(mobileMenuOpen) toggleMobileMenu()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'dashboard' ? 'bg-vaultify-primary text-white shadow-sm' : 'text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg'}">
+                                <i class="fa-solid fa-chart-pie w-5"></i> Dashboard
+                            </a>
+                            <a href="#/analytics" onclick="if(mobileMenuOpen) toggleMobileMenu()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'analytics' ? 'bg-vaultify-primary text-white shadow-sm' : 'text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg'}">
+                                <i class="fa-solid fa-chart-line w-5"></i> Analytics
+                            </a>
+                            <a href="#/transactions" onclick="if(mobileMenuOpen) toggleMobileMenu()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'transactions' ? 'bg-vaultify-primary text-white shadow-sm' : 'text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg'}">
+                                <i class="fa-solid fa-arrow-right-arrow-left w-5"></i> Transactions
+                            </a>
+                            <a href="#/transfers" onclick="if(mobileMenuOpen) toggleMobileMenu()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'transfers' ? 'bg-vaultify-primary text-white shadow-sm' : 'text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg'}">
+                                <i class="fa-solid fa-paper-plane w-5"></i> Transfers
+                            </a>
+                        </nav>
+                    </div>
+
+                    <div>
+                        <p class="px-3 text-xs font-semibold uppercase tracking-wider text-vaultify-textSecondary dark:text-dark-textSecondary mb-2">Others</p>
+                        <nav class="space-y-1">
+                            <a href="#/settings" onclick="if(mobileMenuOpen) toggleMobileMenu()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'settings' ? 'bg-vaultify-primary text-white shadow-sm' : 'text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg'}">
+                                <i class="fa-solid fa-gear w-5"></i> Settings
+                            </a>
+                            <button onclick="handleSignOut()" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors">
+                                <i class="fa-solid fa-right-from-bracket w-5"></i> Sign Out
+                            </button>
+                        </nav>
+                    </div>
+                </div>
+
+                <div class="p-4 border-t border-vaultify-border dark:border-dark-border flex items-center gap-3 bg-vaultify-bg/50 dark:bg-dark-bg/50">
+                    <div class="w-10 h-10 rounded-full bg-vaultify-primary text-white flex items-center justify-center font-bold text-sm shrink-0">
+                        ${userInitials}
+                    </div>
+                    <div class="overflow-hidden">
+                        <p class="text-sm font-semibold text-vaultify-textPrimary dark:text-dark-textPrimary truncate">${userName}</p>
+                        <p class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary truncate">${currentUser?.email}</p>
+                    </div>
+                </div>
+            `;
+
+            return `
+                <div class="h-full flex flex-col md:flex-row overflow-hidden relative">
+                    <!-- Desktop Sidebar -->
+                    <aside class="hidden md:flex w-64 bg-white dark:bg-dark-surface border-r border-vaultify-border dark:border-dark-border flex-col justify-between shrink-0 select-none">
+                        ${sidebarContent}
+                    </aside>
+
+                    <!-- Mobile Drawer Backdrop -->
+                    <div id="mobile-backdrop" onclick="toggleMobileMenu()" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden backdrop-blur-sm"></div>
+
+                    <!-- Mobile Drawer Sidebar -->
+                    <aside id="mobile-drawer" class="fixed inset-y-0 left-0 w-72 bg-white dark:bg-dark-surface border-r border-vaultify-border dark:border-dark-border flex flex-col justify-between shrink-0 z-50 transform -translate-x-full transition-transform duration-300 md:hidden">
+                        ${sidebarContent}
+                    </aside>
+
+                    <!-- Main Content Wrapper -->
+                    <main class="flex-1 flex flex-col h-full overflow-y-auto">
+                        <!-- Top Header Bar -->
+                        <header class="bg-white dark:bg-dark-surface border-b border-vaultify-border dark:border-vaultify-border px-6 py-4 flex items-center justify-between sticky top-0 z-30">
+                            <div class="flex items-center gap-3">
+                                <!-- Hamburger Button -->
+                                <button onclick="toggleMobileMenu()" class="md:hidden w-10 h-10 rounded-lg border border-vaultify-border dark:border-dark-border flex items-center justify-center text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg transition-colors" title="Open Menu">
+                                    <i class="fa-solid fa-bars text-base"></i>
+                                </button>
+                                <div>
+                                    <h1 class="text-lg md:text-2xl font-bold text-vaultify-textPrimary dark:text-dark-textPrimary truncate">Welcome, ${userName}!</h1>
+                                    <p class="text-xs md:text-sm text-vaultify-textSecondary dark:text-dark-textSecondary hidden sm:block">Manage your finances with real-time insights in <span class="font-semibold text-vaultify-primary dark:text-emerald-400">${currentCurrency}</span></p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <button onclick="toggleDarkMode()" class="w-10 h-10 rounded-full border border-vaultify-border dark:border-dark-border flex items-center justify-center text-vaultify-textSecondary dark:text-dark-textSecondary hover:bg-vaultify-bg dark:hover:bg-dark-bg transition-colors" title="Toggle Dark/Light Mode">
+                                    <i class="fa-solid fa-moon dark:fa-sun text-sm"></i>
+                                </button>
+                                <button onclick="openAddTransactionModal()" class="px-3.5 py-2 bg-vaultify-primary text-white text-xs font-semibold rounded-lg hover:bg-vaultify-primaryHover transition-colors flex items-center gap-2 shadow-sm">
+                                    <i class="fa-solid fa-plus"></i> <span class="hidden sm:inline">Add Transaction</span>
+                                </button>
+                            </div>
+                        </header>
+
+                        <!-- Dynamic Page Container -->
+                        <div class="p-4 md:p-8 space-y-6 max-w-7xl w-full mx-auto flex-1">
+                            ${contentHTML}
+                        </div>
+                    </main>
+                </div>
+            `;
+        }
+
+        async function handleSignOut() {
+            await db.auth.signOut();
+            currentUser = null;
+            currentProfile = null;
+            showToast("Signed out successfully");
+            location.hash = '#/login';
+        }
+
+        async function fetchUserTransactions() {
+            const { data, error } = await db.from('transactions').select('*').eq('user_id', currentUser.id).order('transaction_date', { ascending: false });
+            if (error) {
+                showToast("Failed to fetch transactions", "error");
+                return [];
+            }
+            return data || [];
+        }
+
+        async function renderDashboard(container) {
+            container.innerHTML = `<div class="text-center py-12"><i class="fa-solid fa-spinner fa-spin text-2xl text-vaultify-primary"></i></div>`;
+            const transactions = await fetchUserTransactions();
+
+            let totalIncome = 0;
+            let totalExpenses = 0;
+            let categorySums = { Housing: 0, Transportation: 0, 'Food & Dining': 0, Subscriptions: 0, Other: 0 };
+
+            transactions.forEach(t => {
+                const amt = Number(t.amount);
+                if (t.type === 'income') {
+                    totalIncome += amt;
+                } else {
+                    totalExpenses += amt;
+                    if (categorySums[t.category] !== undefined) {
+                        categorySums[t.category] += amt;
+                    } else {
+                        categorySums['Other'] = (categorySums['Other'] || 0) + amt;
+                    }
+                }
+            });
+
+            const netRevenue = totalIncome - totalExpenses;
+            const savings = Math.max(0, netRevenue * 0.5);
+            const totalExpForCat = Object.values(categorySums).reduce((a, b) => a + b, 1);
+
+            const catHousingPct = Math.round((categorySums['Housing'] / totalExpForCat) * 100);
+            const catTransportPct = Math.round((categorySums['Transportation'] / totalExpForCat) * 100);
+            const catFoodPct = 100 - (catHousingPct + catTransportPct);
+
+            const dashboardHTML = `
+                <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <h2 class="text-lg font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Financial Insights Dashboard</h2>
+                    <div class="flex items-center gap-3 w-full sm:w-auto">
+                        <select onchange="changeCurrency(this.value)" class="bg-white dark:bg-dark-surface border border-vaultify-border dark:border-dark-border text-xs rounded-lg px-3 py-2 font-medium text-vaultify-textPrimary dark:text-dark-textPrimary focus:outline-none">
+                            <option value="USD" ${currentCurrency === 'USD' ? 'selected' : ''}>USD ($)</option>
+                            <option value="EUR" ${currentCurrency === 'EUR' ? 'selected' : ''}>EUR (€)</option>
+                            <option value="GBP" ${currentCurrency === 'GBP' ? 'selected' : ''}>GBP (£)</option>
+                            <option value="IDR" ${currentCurrency === 'IDR' ? 'selected' : ''}>IDR (Rp)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div class="bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">Total Income</span>
+                            <span class="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-vaultify-success">
+                                <i class="fa-solid fa-arrow-up text-[10px]"></i> Live
+                            </span>
+                        </div>
+                        <div class="my-4"><span class="text-3xl font-bold tracking-tight text-vaultify-textPrimary dark:text-dark-textPrimary">${formatMoney(totalIncome)}</span></div>
+                        <div class="flex items-center justify-between text-xs text-vaultify-textSecondary dark:text-dark-textSecondary border-t border-vaultify-border dark:border-dark-border pt-3">
+                            <span><i class="fa-solid fa-arrow-trend-up text-vaultify-success mr-1"></i> Real-time DB sync</span>
+                            <span>YTD</span>
+                        </div>
+                    </div>
+
+                    <div class="bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">Total Expenses</span>
+                            <span class="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/40 text-vaultify-error">
+                                <i class="fa-solid fa-arrow-down text-[10px]"></i> Tracked
+                            </span>
+                        </div>
+                        <div class="my-4"><span class="text-3xl font-bold tracking-tight text-vaultify-textPrimary dark:text-dark-textPrimary">${formatMoney(totalExpenses)}</span></div>
+                        <div class="flex items-center justify-between text-xs text-vaultify-textSecondary dark:text-dark-textSecondary border-t border-vaultify-border dark:border-dark-border pt-3">
+                            <span><i class="fa-solid fa-arrow-trend-down text-vaultify-error mr-1"></i> Active outflow</span>
+                            <span>YTD</span>
+                        </div>
+                    </div>
+
+                    <div class="lg:col-span-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
+                        <div class="bg-white dark:bg-dark-surface p-5 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary">Revenue <span class="text-[10px]">This Month</span></p>
+                                <p class="text-2xl font-bold text-vaultify-textPrimary dark:text-dark-textPrimary mt-1">${formatMoney(netRevenue > 0 ? netRevenue : 0)}</p>
+                            </div>
+                            <div class="w-12 h-12 rounded-lg bg-vaultify-bg dark:bg-dark-bg flex items-center justify-center text-vaultify-primary dark:text-emerald-400">
+                                <i class="fa-solid fa-chart-line text-lg"></i>
+                            </div>
+                        </div>
+
+                        <div class="bg-vaultify-primary text-white p-5 rounded-lg shadow-sm flex items-center justify-between relative overflow-hidden">
+                            <div>
+                                <p class="text-xs text-white/80">Available Savings</p>
+                                <p class="text-2xl font-bold mt-1">${formatMoney(savings)}</p>
+                                <p class="text-[11px] text-white/70 mt-1">Healthy reserve pool</p>
+                            </div>
+                            <div class="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-white shrink-0">
+                                <i class="fa-solid fa-piggy-bank"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div class="lg:col-span-5 bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="font-semibold text-vaultify-textPrimary dark:text-dark-textPrimary">Expenditure Category</h3>
+                            <span class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary bg-vaultify-bg dark:bg-dark-bg px-2.5 py-1 rounded-md">Live Ratio</span>
+                        </div>
+                        
+                        <div class="py-6 flex flex-col items-center justify-center">
+                            <div class="w-48 h-48 rounded-full border-8 border-vaultify-bg dark:border-dark-bg relative flex items-center justify-center shadow-inner" style="background: conic-gradient(#0A3A2F 0% ${catHousingPct}%, #10B981 ${catHousingPct}% ${catHousingPct + catTransportPct}%, #6B7280 ${catHousingPct + catTransportPct}% 100%);">
+                                <div class="w-32 h-32 rounded-full bg-white dark:bg-dark-surface flex flex-col items-center justify-center shadow-sm">
+                                    <span class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary font-medium">Total Spent</span>
+                                    <span class="text-sm font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">${formatMoney(totalExpenses)}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="space-y-3 pt-4 border-t border-vaultify-border dark:border-dark-border">
+                            <div class="flex items-center justify-between text-sm">
+                                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-vaultify-primary"></span><span class="text-vaultify-textPrimary dark:text-dark-textPrimary font-medium">Housing</span></div>
+                                <div class="flex items-center gap-4"><span class="text-vaultify-textSecondary dark:text-dark-textSecondary">${formatMoney(categorySums['Housing'])}</span><span class="font-bold">${catHousingPct}%</span></div>
+                            </div>
+                            <div class="flex items-center justify-between text-sm">
+                                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-vaultify-success"></span><span class="text-vaultify-textPrimary dark:text-dark-textPrimary font-medium">Transportation</span></div>
+                                <div class="flex items-center gap-4"><span class="text-vaultify-textSecondary dark:text-dark-textSecondary">${formatMoney(categorySums['Transportation'])}</span><span class="font-bold">${catTransportPct}%</span></div>
+                            </div>
+                            <div class="flex items-center justify-between text-sm">
+                                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-vaultify-textSecondary"></span><span class="text-vaultify-textPrimary dark:text-dark-textPrimary font-medium">Food & Dining</span></div>
+                                <div class="flex items-center gap-4"><span class="text-vaultify-textSecondary dark:text-dark-textSecondary">${formatMoney(categorySums['Food & Dining'])}</span><span class="font-bold">${catFoodPct}%</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="lg:col-span-7 bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm flex flex-col justify-between">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="font-semibold text-vaultify-textPrimary dark:text-dark-textPrimary">Monthly Financial Volume</h3>
+                            <span class="text-xs bg-vaultify-bg dark:bg-dark-bg px-2.5 py-1 rounded-md text-vaultify-textSecondary">Weekly Distribution</span>
+                        </div>
+
+                        <div class="relative h-64 flex items-end justify-between gap-3 px-2 pt-8 pb-4 border-b border-vaultify-border dark:border-dark-border">
+                            <div class="absolute inset-0 flex flex-col justify-between pointer-events-none opacity-40">
+                                <div class="border-b border-vaultify-border dark:border-dark-border w-full text-[10px]">High</div>
+                                <div class="border-b border-vaultify-border dark:border-dark-border w-full text-[10px]">Med</div>
+                                <div class="border-b border-vaultify-border dark:border-dark-border w-full text-[10px]">Low</div>
+                            </div>
+                            
+                            ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => {
+                                const heights = [60, 40, 80, 45, 70, 30, 85];
+                                return `
+                                    <div class="z-10 flex flex-col items-center gap-2 flex-1 group cursor-pointer">
+                                        <div class="w-full max-w-[36px] bg-vaultify-primary dark:bg-emerald-600 rounded-t-md transition-all group-hover:bg-vaultify-primaryHover" style="height: ${heights[idx]}%;"></div>
+                                        <span class="text-xs font-medium text-vaultify-textSecondary dark:text-dark-textSecondary">${day}</span>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+
+                        <div class="flex items-center justify-between text-xs text-vaultify-textSecondary dark:text-dark-textSecondary pt-4">
+                            <span>Peak transaction activity synchronized</span>
+                            <a href="#/transactions" class="text-vaultify-primary dark:text-emerald-400 font-semibold hover:underline">View All Transactions &rarr;</a>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            container.innerHTML = renderShell('dashboard', dashboardHTML);
+        }
+
+        async function changeCurrency(newCurr) {
+            currentCurrency = newCurr;
+            await db.from('profiles').update({ currency: newCurr }).eq('id', currentUser.id);
+            router();
+        }
+
+        async function renderAnalytics(container) {
+            const transactions = await fetchUserTransactions();
+            const totalIncome = transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount), 0);
+            const totalExpense = transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount), 0);
+
+            const analyticsHTML = `
+                <div class="space-y-6">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-lg font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Deep Analytics & Cashflow</h2>
+                        <span class="text-xs bg-vaultify-primary/10 text-vaultify-primary dark:text-emerald-400 px-3 py-1 rounded-lg font-semibold">Live Auditing</span>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm space-y-4">
+                            <h3 class="font-semibold text-vaultify-textPrimary dark:text-dark-textPrimary">Income vs Expenses Ratio</h3>
+                            <div class="space-y-3">
+                                <div>
+                                    <div class="flex justify-between text-xs mb-1">
+                                        <span class="text-vaultify-textSecondary">Total Inflows</span>
+                                        <span class="font-bold text-vaultify-success">${formatMoney(totalIncome)}</span>
+                                    </div>
+                                    <div class="w-full bg-vaultify-bg dark:bg-dark-bg h-3 rounded-full overflow-hidden">
+                                        <div class="bg-vaultify-success h-full" style="width: 100%"></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="flex justify-between text-xs mb-1">
+                                        <span class="text-vaultify-textSecondary">Total Outflows</span>
+                                        <span class="font-bold text-vaultify-error">${formatMoney(totalExpense)}</span>
+                                    </div>
+                                    <div class="w-full bg-vaultify-bg dark:bg-dark-bg h-3 rounded-full overflow-hidden">
+                                        <div class="bg-vaultify-error h-full" style="width: ${Math.min(100, (totalExpense / (totalIncome || 1)) * 100)}%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm flex flex-col justify-between">
+                            <div>
+                                <h3 class="font-semibold text-vaultify-textPrimary dark:text-dark-textPrimary mb-2">AI Financial Health Score</h3>
+                                <p class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary">Based on your recent transaction records stored in Supabase.</p>
+                            </div>
+                            <div class="py-6 flex items-center justify-center">
+                                <div class="w-32 h-32 rounded-full border-4 border-vaultify-primary flex flex-col items-center justify-center bg-vaultify-primary/5">
+                                    <span class="text-3xl font-extrabold text-vaultify-primary dark:text-emerald-400">92</span>
+                                    <span class="text-[10px] font-bold uppercase tracking-wider text-vaultify-textSecondary">Excellent</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.innerHTML = renderShell('analytics', analyticsHTML);
+        }
+
+        async function renderTransactions(container) {
+            container.innerHTML = `<div class="text-center py-12"><i class="fa-solid fa-spinner fa-spin text-2xl text-vaultify-primary"></i></div>`;
+            const transactions = await fetchUserTransactions();
+
+            const txHTML = `
+                <div class="space-y-6">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Transactions Activity Overview</h2>
+                            <p class="text-xs text-vaultify-textSecondary dark:text-dark-textSecondary">Manage and inspect all income & expenses securely.</p>
+                        </div>
+                        <button onclick="openAddTransactionModal()" class="px-4 py-2 bg-vaultify-primary text-white text-xs font-semibold rounded-lg hover:bg-vaultify-primaryHover transition-colors flex items-center gap-2">
+                            <i class="fa-solid fa-plus"></i> New Transaction
+                        </button>
+                    </div>
+
+                    <div class="bg-white dark:bg-dark-surface rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-vaultify-textPrimary text-white text-xs font-semibold uppercase tracking-wider">
+                                        <th class="py-4 px-6">Date</th>
+                                        <th class="py-4 px-6">Title & Desc</th>
+                                        <th class="py-4 px-6">Category</th>
+                                        <th class="py-4 px-6">Account</th>
+                                        <th class="py-4 px-6">Amount</th>
+                                        <th class="py-4 px-6">Status</th>
+                                        <th class="py-4 px-6 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-vaultify-border dark:divide-dark-border text-sm">
+                                    ${transactions.length === 0 ? `
+                                        <tr><td colspan="7" class="py-8 text-center text-vaultify-textSecondary">No transactions recorded yet. Click 'New Transaction' to begin.</td></tr>
+                                    ` : transactions.map(t => `
+                                        <tr class="hover:bg-vaultify-bg/50 dark:hover:bg-dark-bg/50 transition-colors">
+                                            <td class="py-4 px-6 text-xs text-vaultify-textSecondary">${new Date(t.transaction_date).toLocaleDateString()}</td>
+                                            <td class="py-4 px-6">
+                                                <p class="font-medium text-vaultify-textPrimary dark:text-dark-textPrimary">${t.title}</p>
+                                                <p class="text-xs text-vaultify-textSecondary">${t.description || '-'}</p>
+                                            </td>
+                                            <td class="py-4 px-6 text-xs text-vaultify-textSecondary">${t.category}</td>
+                                            <td class="py-4 px-6 text-xs text-vaultify-textSecondary">${t.account}</td>
+                                            <td class="py-4 px-6 font-semibold ${t.type === 'income' ? 'text-vaultify-success' : 'text-vaultify-textPrimary dark:text-dark-textPrimary'}">
+                                                ${t.type === 'income' ? '+' : '-'}${formatMoney(t.amount)}
+                                            </td>
+                                            <td class="py-4 px-6">
+                                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${t.status === 'Completed' ? 'bg-emerald-50 dark:bg-emerald-950/40 text-vaultify-success' : 'bg-rose-50 text-vaultify-error'}">
+                                                    <span class="w-1.5 h-1.5 rounded-full ${t.status === 'Completed' ? 'bg-vaultify-success' : 'bg-vaultify-error'}"></span> ${t.status}
+                                                </span>
+                                            </td>
+                                            <td class="py-4 px-6 text-right">
+                                                <button onclick="deleteTransaction('${t.id}')" class="text-xs text-rose-600 hover:underline"><i class="fa-solid fa-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.innerHTML = renderShell('transactions', txHTML);
+        }
+
+        async function deleteTransaction(id) {
+            if (!confirm("Are you sure you want to delete this transaction?")) return;
+            const { error } = await db.from('transactions').delete().eq('id', id);
+            if (error) {
+                showToast("Failed to delete", "error");
+            } else {
+                showToast("Transaction deleted");
+                router();
+            }
+        }
+
+        async function renderTransfers(container) {
+            const { data: transfers } = await db.from('transfers').select('*').eq('user_id', currentUser.id).order('created_at', { ascending: false });
+
+            const transfersHTML = `
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div class="lg:col-span-5 bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm space-y-4">
+                        <h3 class="font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Send New Transfer</h3>
+                        <form onsubmit="handleTransferSubmit(event)" class="space-y-4">
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Recipient Name / Account</label>
+                                <input type="text" id="transfer-recipient" required placeholder="John Doe or IBAN" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Source Account</label>
+                                <input type="text" id="transfer-source" required value="Vaultify Main (****4673)" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Amount (USD)</label>
+                                <input type="number" step="0.01" id="transfer-amount" required placeholder="150.00" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                            </div>
+                            <button type="submit" class="w-full py-3 bg-vaultify-primary text-white rounded-lg font-semibold text-sm hover:bg-vaultify-primaryHover shadow-sm">Execute Transfer</button>
+                        </form>
+                    </div>
+
+                    <div class="lg:col-span-7 bg-white dark:bg-dark-surface p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm space-y-4">
+                        <h3 class="font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Recent Transfer Logs</h3>
+                        <div class="divide-y divide-vaultify-border dark:divide-dark-border">
+                            ${!transfers || transfers.length === 0 ? '<p class="text-xs text-vaultify-textSecondary py-4">No transfers executed yet.</p>' : transfers.map(tr => `
+                                <div class="py-3 flex items-center justify-between text-sm">
+                                    <div>
+                                        <p class="font-medium text-vaultify-textPrimary dark:text-dark-textPrimary">${tr.recipient_name}</p>
+                                        <p class="text-xs text-vaultify-textSecondary">From: ${tr.account_from} • ${new Date(tr.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                    <span class="font-bold text-vaultify-primary dark:text-emerald-400">${formatMoney(tr.amount)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.innerHTML = renderShell('transfers', transfersHTML);
+        }
+
+        async function handleTransferSubmit(e) {
+            e.preventDefault();
+            const recipient = document.getElementById('transfer-recipient').value;
+            const source = document.getElementById('transfer-source').value;
+            const amount = document.getElementById('transfer-amount').value;
+
+            const { error } = await db.from('transfers').insert({
+                user_id: currentUser.id,
+                recipient_name: recipient,
+                account_from: source,
+                amount: parseFloat(amount),
+                status: 'Completed'
+            });
+
+            if (error) {
+                showToast(error.message, 'error');
+            } else {
+                showToast("Transfer executed successfully!");
+                router();
+            }
+        }
+
+        function renderSettings(container) {
+            const settingsHTML = `
+                <div class="max-w-xl bg-white dark:bg-dark-surface p-8 rounded-lg border border-vaultify-border dark:border-dark-border shadow-sm space-y-6">
+                    <h2 class="text-lg font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Security & Preferences</h2>
+                    
+                    <form onsubmit="handlePasswordUpdate(event)" class="space-y-4 pt-4 border-t border-vaultify-border dark:border-dark-border">
+                        <h3 class="text-sm font-semibold text-vaultify-textPrimary dark:text-dark-textPrimary">Change Password</h3>
+                        <div>
+                            <label class="text-xs font-medium text-vaultify-textSecondary">New Password</label>
+                            <input type="password" id="new-password" required placeholder="••••••••" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                        </div>
+                        <button type="submit" class="px-4 py-2 bg-vaultify-primary text-white text-xs font-semibold rounded-lg hover:bg-vaultify-primaryHover shadow-sm">Update Password</button>
+                    </form>
+                </div>
+            `;
+            container.innerHTML = renderShell('settings', settingsHTML);
+        }
+
+        async function handlePasswordUpdate(e) {
+            e.preventDefault();
+            const newPassword = document.getElementById('new-password').value;
+            const { error } = await db.auth.updateUser({ password: newPassword });
+            if (error) {
+                showToast(error.message, 'error');
+            } else {
+                showToast("Password updated successfully!");
+                document.getElementById('new-password').value = '';
+            }
+        }
+
+        function openAddTransactionModal() {
+            const modal = document.createElement('div');
+            modal.id = 'tx-modal';
+            modal.className = 'fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm';
+            modal.innerHTML = `
+                <div class="bg-white dark:bg-dark-surface w-full max-w-md p-6 rounded-lg border border-vaultify-border dark:border-dark-border shadow-xl space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="font-bold text-vaultify-textPrimary dark:text-dark-textPrimary">Add New Transaction</h3>
+                        <button onclick="document.getElementById('tx-modal').remove()" class="text-vaultify-textSecondary hover:text-vaultify-textPrimary"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <form onsubmit="handleTransactionCreate(event)" class="space-y-3">
+                        <div>
+                            <label class="text-xs font-medium text-vaultify-textSecondary">Title</label>
+                            <input type="text" id="tx-title" required placeholder="Netflix Subscription" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-vaultify-primary">
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Type</label>
+                                <select id="tx-type" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none">
+                                    <option value="expense">Expense</option>
+                                    <option value="income">Income</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Amount (USD)</label>
+                                <input type="number" step="0.01" id="tx-amount" required placeholder="25.00" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Category</label>
+                                <select id="tx-category" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none">
+                                    <option value="Housing">Housing</option>
+                                    <option value="Transportation">Transportation</option>
+                                    <option value="Food & Dining">Food & Dining</option>
+                                    <option value="Subscriptions">Subscriptions</option>
+                                    <option value="Salary">Salary</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-xs font-medium text-vaultify-textSecondary">Account</label>
+                                <input type="text" id="tx-account" required value="Main Bank" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-xs font-medium text-vaultify-textSecondary">Description / Note</label>
+                            <input type="text" id="tx-desc" placeholder="Monthly bill" class="w-full mt-1 px-4 py-2 bg-vaultify-bg dark:bg-dark-bg border border-vaultify-border dark:border-dark-border rounded-lg text-sm focus:outline-none">
+                        </div>
+                        <button type="submit" class="w-full py-3 bg-vaultify-primary text-white rounded-lg font-semibold text-sm hover:bg-vaultify-primaryHover shadow-sm mt-2">Save Transaction</button>
+                    </form>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        async function handleTransactionCreate(e) {
+            e.preventDefault();
+            const title = document.getElementById('tx-title').value;
+            const type = document.getElementById('tx-type').value;
+            const amount = document.getElementById('tx-amount').value;
+            const category = document.getElementById('tx-category').value;
+            const account = document.getElementById('tx-account').value;
+            const description = document.getElementById('tx-desc').value;
+
+            const { error } = await db.from('transactions').insert({
+                user_id: currentUser.id,
+                title,
+                type,
+                amount: parseFloat(amount),
+                category,
+                account,
+                description,
+                status: 'Completed'
+            });
+
+            if (error) {
+                showToast(error.message, 'error');
+            } else {
+                showToast("Transaction added successfully!");
+                document.getElementById('tx-modal').remove();
+                router();
+            }
+        }
+    </script>
+</body>
+</html>
