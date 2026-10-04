@@ -141,7 +141,7 @@ create trigger on_auth_user_created
 
 1. Clone this repository to your local machine:
    ```bash
-   git clone https://github.com/your-username/vaultify.git
+   git clone https://github.com/Qaidy/vaultify.git
    ```
 2. Open the project folder and make sure your Supabase URL and Anon Key are correctly configured inside `index.html`:
    ```javascript
